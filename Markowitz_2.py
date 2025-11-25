@@ -1,15 +1,16 @@
 """
 Package Import
 """
-import yfinance as yf
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import quantstats as qs
-import gurobipy as gp
-import warnings
 import argparse
 import sys
+import warnings
+
+import gurobipy as gp
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import quantstats as qs
+import yfinance as yf
 
 """
 Project Setup
@@ -51,7 +52,7 @@ class MyPortfolio:
     NOTE: You can modify the initialization function
     """
 
-    def __init__(self, price, exclude, lookback=50, gamma=0):
+    def __init__(self, price, exclude, lookback=50, gamma=3.0):
         self.price = price
         self.returns = price.pct_change().fillna(0)
         self.exclude = exclude
@@ -70,14 +71,78 @@ class MyPortfolio:
         """
         TODO: Complete Task 4 Below
         """
+        # Combined approach: Mean-Variance with risk parity adjustment
+        for i in range(self.lookback + 1, len(self.price)):
+            R_n = self.returns[assets].iloc[i - self.lookback : i]
+            
+            # Calculate volatilities for risk parity component
+            volatilities = R_n.std()
+            
+            # Skip if any volatility is too low
+            if (volatilities < 1e-6).any():
+                continue
+                
+            # Get MV weights
+            mv_weights = np.array(self.mv_opt(R_n, self.gamma))
+            
+            # Get risk parity weights
+            inv_vol = 1.0 / volatilities.values
+            rp_weights = inv_vol / inv_vol.sum()
+            
+            # Blend: 70% MV, 30% RP
+            blended_weights = 0.7 * mv_weights + 0.3 * rp_weights
+            
+            # Normalize
+            blended_weights = blended_weights / blended_weights.sum()
+            
+            self.portfolio_weights.loc[self.price.index[i], assets] = blended_weights
         
-        
+        # Set excluded asset weight to 0
+        self.portfolio_weights[self.exclude] = 0
         """
         TODO: Complete Task 4 Above
         """
 
         self.portfolio_weights.ffill(inplace=True)
         self.portfolio_weights.fillna(0, inplace=True)
+
+    def mv_opt(self, R_n, gamma):
+        """Mean-Variance optimization"""
+        Sigma = R_n.cov().values
+        mu = R_n.mean().values
+        n = len(R_n.columns)
+
+        with gp.Env(empty=True) as env:
+            env.setParam("OutputFlag", 0)
+            env.setParam("DualReductions", 0)
+            env.start()
+            with gp.Model(env=env, name="portfolio") as model:
+                w = model.addMVar(n, name="w", lb=0, ub=1)
+                
+                # Objective: maximize (w^T * mu - gamma/2 * w^T * Sigma * w)
+                portfolio_return = w @ mu
+                portfolio_variance = w @ Sigma @ w
+                
+                model.setObjective(
+                    portfolio_return - (gamma / 2) * portfolio_variance,
+                    gp.GRB.MAXIMIZE
+                )
+                
+                # Constraint: sum of weights = 1 (no leverage)
+                model.addConstr(w.sum() == 1, "budget")
+
+                model.optimize()
+
+                # Check model status
+                if model.status == gp.GRB.OPTIMAL or model.status == gp.GRB.SUBOPTIMAL:
+                    solution = []
+                    for i in range(n):
+                        var = model.getVarByName(f"w[{i}]")
+                        solution.append(var.X)
+                    return solution
+                else:
+                    # Return equal weights if optimization fails
+                    return [1.0/n] * n
 
     def calculate_portfolio_returns(self):
         # Ensure weights are calculated

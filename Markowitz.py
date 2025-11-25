@@ -1,15 +1,16 @@
 """
 Package Import
 """
-import yfinance as yf
+import argparse
+import sys
+import warnings
+
+import gurobipy as gp
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import quantstats as qs
-import gurobipy as gp
-import argparse
-import warnings
-import sys
+import yfinance as yf
 
 """
 Project Setup
@@ -62,7 +63,15 @@ class EqualWeightPortfolio:
         """
         TODO: Complete Task 1 Below
         """
-
+        # Equal weight for all assets except the excluded one
+        num_assets = len(assets)
+        equal_weight = 1.0 / num_assets
+        
+        for asset in assets:
+            self.portfolio_weights[asset] = equal_weight
+        
+        # Set excluded asset weight to 0
+        self.portfolio_weights[self.exclude] = 0
         """
         TODO: Complete Task 1 Above
         """
@@ -113,9 +122,22 @@ class RiskParityPortfolio:
         """
         TODO: Complete Task 2 Below
         """
-
-
-
+        for i in range(self.lookback + 1, len(df)):
+            # Get historical returns for the lookback period
+            R_n = df_returns[assets].iloc[i - self.lookback : i]
+            
+            # Calculate volatility (standard deviation) for each asset
+            volatility = R_n.std()
+            
+            # Calculate inverse volatility weights
+            inv_vol = 1.0 / volatility
+            weights = inv_vol / inv_vol.sum()
+            
+            # Assign weights to portfolio
+            self.portfolio_weights.loc[df.index[i], assets] = weights.values
+        
+        # Set excluded asset weight to 0
+        self.portfolio_weights[self.exclude] = 0
         """
         TODO: Complete Task 2 Above
         """
@@ -190,8 +212,19 @@ class MeanVariancePortfolio:
 
                 # Sample Code: Initialize Decision w and the Objective
                 # NOTE: You can modify the following code
-                w = model.addMVar(n, name="w", ub=1)
-                model.setObjective(w.sum(), gp.GRB.MAXIMIZE)
+                w = model.addMVar(n, name="w", lb=0, ub=1)
+                
+                # Objective: maximize (w^T * mu - gamma/2 * w^T * Sigma * w)
+                portfolio_return = w @ mu
+                portfolio_variance = w @ Sigma @ w
+                
+                model.setObjective(
+                    portfolio_return - (gamma / 2) * portfolio_variance,
+                    gp.GRB.MAXIMIZE
+                )
+                
+                # Constraint: sum of weights = 1 (no leverage)
+                model.addConstr(w.sum() == 1, "budget")
 
                 """
                 TODO: Complete Task 3 Above
